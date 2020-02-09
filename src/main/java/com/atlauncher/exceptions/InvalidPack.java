@@ -1,6 +1,6 @@
 /*
  * ATLauncher - https://github.com/ATLauncher/ATLauncher
- * Copyright (C) 2013 ATLauncher
+ * Copyright (C) 2013-2019 ATLauncher
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -17,12 +17,10 @@
  */
 package com.atlauncher.exceptions;
 
-
 /**
  * InvalidPack is thrown when searching for a Pack by ID and that ID isn't found
- *
- * @author Ryan
  */
+@SuppressWarnings("serial")
 public class InvalidPack extends Exception {
     public InvalidPack(String message) {
         super(message);

@@ -1,6 +1,6 @@
 /*
  * ATLauncher - https://github.com/ATLauncher/ATLauncher
- * Copyright (C) 2013 ATLauncher
+ * Copyright (C) 2013-2019 ATLauncher
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -17,27 +17,26 @@
  */
 package com.atlauncher.utils;
 
-import com.atlauncher.LogManager;
-import com.atlauncher.data.Constants;
-import com.atlauncher.data.mojang.OperatingSystem;
-
 import java.io.IOException;
 import java.util.HashMap;
 import java.util.Map;
+
+import com.atlauncher.LogManager;
+import com.atlauncher.data.Constants;
 
 /**
  * Various utility methods for interacting with the ATLauncher API.
  */
 public class ATLauncherAPIUtils {
     public static void postSystemInfo() {
-        Map<String, Object> request = new HashMap<String, Object>();
+        Map<String, Object> request = new HashMap<>();
 
         request.put("launcher_version", Constants.VERSION.toString());
-        request.put("os_name", OperatingSystem.getOS().getName());
-        request.put("os_version", OperatingSystem.getVersion());
+        request.put("os_name", OS.getOS().toString().toLowerCase());
+        request.put("os_version", System.getProperty("os.version"));
         request.put("java_version", System.getProperty("java.version"));
-        request.put("ram", Utils.getSystemRam());
-        request.put("64_bit", Utils.is64Bit());
+        request.put("ram", OS.getSystemRam());
+        request.put("64_bit", OS.is64Bit());
 
         try {
             Utils.sendAPICall("system-info", request);

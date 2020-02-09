@@ -1,6 +1,6 @@
 /*
  * ATLauncher - https://github.com/ATLauncher/ATLauncher
- * Copyright (C) 2013 ATLauncher
+ * Copyright (C) 2013-2019 ATLauncher
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -17,27 +17,6 @@
  */
 package com.atlauncher.data;
 
-import com.atlauncher.App;
-import com.atlauncher.Gsons;
-import com.atlauncher.LogManager;
-import com.atlauncher.data.mojang.api.MinecraftProfileResponse;
-import com.atlauncher.data.mojang.api.ProfileTexture;
-import com.atlauncher.gui.dialogs.ProgressDialog;
-import com.atlauncher.gui.tabs.InstancesTab;
-import com.atlauncher.gui.tabs.PacksTab;
-import com.atlauncher.utils.Authentication;
-import com.atlauncher.utils.HTMLUtils;
-import com.atlauncher.utils.MojangAPIUtils;
-import com.atlauncher.utils.Utils;
-import com.mojang.authlib.yggdrasil.YggdrasilUserAuthentication;
-import com.mojang.util.UUIDTypeAdapter;
-
-import javax.imageio.ImageIO;
-import javax.swing.ImageIcon;
-import javax.swing.JLabel;
-import javax.swing.JOptionPane;
-import javax.swing.JPanel;
-import javax.swing.JPasswordField;
 import java.awt.BorderLayout;
 import java.awt.Graphics;
 import java.awt.Image;
@@ -49,12 +28,37 @@ import java.io.InputStreamReader;
 import java.io.ObjectInputStream;
 import java.io.Serializable;
 import java.net.HttpURLConnection;
-import java.net.MalformedURLException;
 import java.net.URL;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+
+import javax.imageio.ImageIO;
+import javax.swing.ImageIcon;
+import javax.swing.JLabel;
+import javax.swing.JPanel;
+import javax.swing.JPasswordField;
+
+import com.atlauncher.App;
+import com.atlauncher.FileSystem;
+import com.atlauncher.Gsons;
+import com.atlauncher.LogManager;
+import com.atlauncher.builders.HTMLBuilder;
+import com.atlauncher.data.mojang.api.MinecraftProfileResponse;
+import com.atlauncher.data.mojang.api.ProfileTexture;
+import com.atlauncher.gui.dialogs.ProgressDialog;
+import com.atlauncher.gui.tabs.InstancesTab;
+import com.atlauncher.gui.tabs.PacksTab;
+import com.atlauncher.managers.DialogManager;
+import com.atlauncher.network.Download;
+import com.atlauncher.utils.Authentication;
+import com.atlauncher.utils.MojangAPIUtils;
+import com.atlauncher.utils.Utils;
+import com.mojang.authlib.yggdrasil.YggdrasilUserAuthentication;
+import com.mojang.util.UUIDTypeAdapter;
+
+import org.mini2Dx.gettext.GetText;
 
 /**
  * This class deals with the Accounts in the launcher.
@@ -86,11 +90,6 @@ public class Account implements Serializable {
     private String clientToken;
 
     /**
-     * The access token.
-     */
-    private String accessToken;
-
-    /**
      * The account's Minecraft username.
      */
     private String minecraftUsername;
@@ -116,9 +115,12 @@ public class Account implements Serializable {
     private List<String> collapsedPacks;
 
     /**
-     * The instance names this account has collapsed in the {@link InstancesTab}, if any.
+     * The instance names this account has collapsed in the {@link InstancesTab}, if
+     * any.
      */
     private List<String> collapsedInstances;
+
+    private List<String> collapsedServers;
 
     /**
      * If the skin is currently being updated.
@@ -137,9 +139,11 @@ public class Account implements Serializable {
      * @param password          The password of the Account
      * @param minecraftUsername The Minecraft username of the Account
      * @param uuid              The UUID of the Account
-     * @param remember          If this Account's password should be remembered or not
+     * @param remember          If this Account's password should be remembered or
+     *                          not
      */
-    public Account(String username, String password, String minecraftUsername, String uuid, boolean remember) {
+    public Account(String username, String password, String minecraftUsername, String uuid, boolean remember,
+            String clientToken) {
         this.username = username;
         if (remember) {
             this.password = password;
@@ -149,12 +153,15 @@ public class Account implements Serializable {
         this.uuid = uuid;
         this.remember = remember;
         this.isReal = true;
-        this.collapsedPacks = new ArrayList<String>();
-        this.collapsedInstances = new ArrayList<String>();
+        this.collapsedPacks = new ArrayList<>();
+        this.collapsedInstances = new ArrayList<>();
+        this.collapsedServers = new ArrayList<>();
+        this.clientToken = clientToken;
     }
 
     /**
-     * Constructor for a fake user account, used for displaying non selectable accounts.
+     * Constructor for a fake user account, used for displaying non selectable
+     * accounts.
      *
      * @param name The name of the Account
      */
@@ -164,20 +171,21 @@ public class Account implements Serializable {
         this.uuid = UUID.randomUUID() + "";
         this.remember = false;
         this.isReal = false;
-        this.collapsedPacks = new ArrayList<String>();
-        this.collapsedInstances = new ArrayList<String>();
+        this.collapsedPacks = new ArrayList<>();
+        this.collapsedInstances = new ArrayList<>();
+        this.collapsedServers = new ArrayList<>();
     }
 
     /**
-     * Creates an {@link ImageIcon} of the Account's Minecraft skin, getting just the head of it.
+     * Creates an {@link ImageIcon} of the Account's Minecraft skin, getting just
+     * the head of it.
      *
      * @return The Account's Minecraft usernames head
      */
     public ImageIcon getMinecraftHead() {
         File file = null;
         if (this.isReal()) {
-            file = new File(App.settings.getSkinsDir(), (this.isUUIDNull() ? "default" : this.getUUIDNoDashes()) +
-                ".png");
+            file = FileSystem.SKINS.resolve((this.isUUIDNull() ? "default" : this.getUUIDNoDashes()) + ".png").toFile();
             if (!file.exists()) {
                 this.updateSkin(); // Download/update the users skin
             }
@@ -185,10 +193,20 @@ public class Account implements Serializable {
 
         // If the file doesn't exist then use the default Minecraft skin.
         if (file == null || !file.exists()) {
-            file = new File(App.settings.getSkinsDir(), "default.png");
+            file = FileSystem.SKINS.resolve("default.png").toFile();
         }
 
         BufferedImage image = null;
+        try {
+            image = ImageIO.read(file);
+        } catch (IOException e) {
+            LogManager.logStackTrace(e);
+        }
+
+        if (image == null) {
+            file = FileSystem.SKINS.resolve("default.png").toFile();
+        }
+
         try {
             image = ImageIO.read(file);
         } catch (IOException e) {
@@ -216,7 +234,7 @@ public class Account implements Serializable {
     public ImageIcon getMinecraftSkin() {
         File file = null;
         if (this.isReal()) {
-            file = new File(App.settings.getSkinsDir(), this.getUUIDNoDashes() + ".png");
+            file = FileSystem.SKINS.resolve(this.getUUIDNoDashes() + ".png").toFile();
             if (!file.exists()) {
                 this.updateSkin(); // Download/update the users skin
             }
@@ -224,10 +242,20 @@ public class Account implements Serializable {
 
         // If the file doesn't exist then use the default Minecraft skin.
         if (file == null || !file.exists()) {
-            file = new File(App.settings.getSkinsDir(), "default.png");
+            file = FileSystem.SKINS.resolve("default.png").toFile();
         }
 
         BufferedImage image = null;
+        try {
+            image = ImageIO.read(file);
+        } catch (IOException e) {
+            LogManager.logStackTrace(e);
+        }
+
+        if (image == null) {
+            file = FileSystem.SKINS.resolve("default.png").toFile();
+        }
+
         try {
             image = ImageIO.read(file);
         } catch (IOException e) {
@@ -244,7 +272,8 @@ public class Account implements Serializable {
         Graphics g = skin.getGraphics();
         g.drawImage(head, 4, 0, null);
 
-        // Draw the helmet on the skin if more than half of the pixels are not transparent.
+        // Draw the helmet on the skin if more than half of the pixels are not
+        // transparent.
         if (Utils.nonTransparentPixels(helmet) <= 32) {
             g.drawImage(helmet, 4, 0, null);
         }
@@ -261,15 +290,17 @@ public class Account implements Serializable {
     /**
      * If this Account is real or not.
      *
-     * @return true if the Account is real and was added by the user, false otherwise
+     * @return true if the Account is real and was added by the user, false
+     *         otherwise
      */
     public boolean isReal() {
         return this.isReal;
     }
 
     /**
-     * Gets the username used for logging into Mojang servers. Can be an email address or a username if the user has not
-     * migrated their Minecraft account to a Mojang account.
+     * Gets the username used for logging into Mojang servers. Can be an email
+     * address or a username if the user has not migrated their Minecraft account to
+     * a Mojang account.
      *
      * @return The username used for logging into Mojang servers
      */
@@ -379,7 +410,8 @@ public class Account implements Serializable {
     /**
      * Sets this Account to remember or not remember the password.
      *
-     * @param remember True if the password should be remembered, False if it shouldn't be remembered
+     * @param remember True if the password should be remembered, False if it
+     *                 shouldn't be remembered
      */
     public void setRemember(boolean remember) {
         this.remember = remember;
@@ -419,93 +451,96 @@ public class Account implements Serializable {
      */
     public List<String> getCollapsedPacks() {
         if (this.collapsedPacks == null) {
-            this.collapsedPacks = new ArrayList<String>();
+            this.collapsedPacks = new ArrayList<>();
         }
         return this.collapsedPacks;
     }
 
     /**
-     * Gets a List of instances this Account has collapsed in the {@link InstancesTab}.
+     * Gets a List of instances this Account has collapsed in the
+     * {@link InstancesTab}.
      *
      * @return List of collapsed instances
      */
     public List<String> getCollapsedInstances() {
         if (this.collapsedInstances == null) {
-            this.collapsedInstances = new ArrayList<String>();
+            this.collapsedInstances = new ArrayList<>();
         }
         return this.collapsedInstances;
     }
 
+    public List<String> getCollapsedServers() {
+        if (this.collapsedServers == null) {
+            this.collapsedServers = new ArrayList<>();
+        }
+        return this.collapsedServers;
+    }
+
     /**
-     * Updates this Account's skin by redownloading the Minecraft skin from Mojang's skin server.
+     * Updates this Account's skin by redownloading the Minecraft skin from Mojang's
+     * skin server.
      */
     public void updateSkin() {
         if (!this.skinUpdating) {
             this.skinUpdating = true;
-            final File file = new File(App.settings.getSkinsDir(), this.getUUIDNoDashes() + ".png");
+            final File file = FileSystem.SKINS.resolve(this.getUUIDNoDashes() + ".png").toFile();
             LogManager.info("Downloading skin for " + this.minecraftUsername);
-            final ProgressDialog dialog = new ProgressDialog(Language.INSTANCE.localize("account" + "" +
-                ".downloadingskin"), 0, Language.INSTANCE.localizeWithReplace("account.downloadingminecraftskin",
-                this.minecraftUsername), "Aborting downloading Minecraft skin for " + this.minecraftUsername);
+            final ProgressDialog dialog = new ProgressDialog(GetText.tr("Downloading Skin"), 0,
+                    GetText.tr("Downloading Skin For {0}", this.minecraftUsername),
+                    "Aborting downloading Minecraft skin for " + this.minecraftUsername);
             final UUID uid = this.getRealUUID();
-            dialog.addThread(new Thread() {
-                public void run() {
-                    dialog.setReturnValue(false);
-                    String skinURL = getSkinURL();
-                    if (skinURL == null) {
-                        LogManager.warn("Couldn't download skin because the url found was NULL. Using default skin");
-                        if (!file.exists()) {
-                            String skinFilename = "default.png";
+            dialog.addThread(new Thread(() -> {
+                dialog.setReturnValue(false);
+                String skinURL = getSkinURL();
+                if (skinURL == null) {
+                    LogManager.warn("Couldn't download skin because the url found was NULL. Using default skin");
+                    if (!file.exists()) {
+                        String skinFilename = "default.png";
 
-                            // even UUID's use the alex skin
-                            if ((uid.hashCode() & 1) != 0) {
-                                skinFilename = "default_alex.png";
-                            }
-
-                            // Only copy over the default skin if there is no skin for the user
-                            Utils.copyFile(new File(App.settings.getSkinsDir(), skinFilename), file, true);
-                            dialog.setReturnValue(true);
+                        // even UUID's use the alex skin
+                        if ((uid.hashCode() & 1) != 0) {
+                            skinFilename = "default_alex.png";
                         }
-                    } else {
-                        try {
-                            HttpURLConnection conn = (HttpURLConnection) new URL(skinURL).openConnection();
-                            if (conn.getResponseCode() == 200) {
-                                if (file.exists()) {
-                                    Utils.delete(file);
-                                }
-                                Downloadable skin = new Downloadable(skinURL, file, null, null, false);
-                                skin.download(false);
-                                dialog.setReturnValue(true);
-                            } else {
-                                if (!file.exists()) {
-                                    String skinFilename = "default.png";
 
-                                    // even UUID's use the alex skin
-                                    if ((uid.hashCode() & 1) != 0) {
-                                        skinFilename = "default_alex.png";
-                                    }
-
-                                    // Only copy over the default skin if there is no skin for the user
-                                    Utils.copyFile(new File(App.settings.getSkinsDir(), skinFilename), file, true);
-                                    dialog.setReturnValue(true);
-                                }
-                            }
-                        } catch (MalformedURLException e) {
-                            LogManager.logStackTrace(e);
-                        } catch (IOException e) {
-                            LogManager.logStackTrace(e);
-                        }
-                        App.settings.reloadAccounts();
+                        // Only copy over the default skin if there is no skin for the user
+                        Utils.copyFile(FileSystem.SKINS.resolve(skinFilename).toFile(), file, true);
+                        dialog.setReturnValue(true);
                     }
-                    dialog.close();
+                } else {
+                    try {
+                        HttpURLConnection conn = (HttpURLConnection) new URL(skinURL).openConnection();
+                        if (conn.getResponseCode() == 200) {
+                            if (file.exists()) {
+                                Utils.delete(file);
+                            }
+                            Download.build().setUrl(skinURL).downloadTo(file.toPath()).downloadFile();
+                            dialog.setReturnValue(true);
+                        } else {
+                            if (!file.exists()) {
+                                String skinFilename = "default.png";
+
+                                // even UUID's use the alex skin
+                                if ((uid.hashCode() & 1) != 0) {
+                                    skinFilename = "default_alex.png";
+                                }
+
+                                // Only copy over the default skin if there is no skin for the user
+                                Utils.copyFile(FileSystem.SKINS.resolve(skinFilename).toFile(), file, true);
+                                dialog.setReturnValue(true);
+                            }
+                        }
+                    } catch (IOException e) {
+                        LogManager.logStackTrace(e);
+                    }
+                    App.settings.reloadAccounts();
                 }
-            });
+                dialog.close();
+            }));
             dialog.start();
             if (!(Boolean) dialog.getReturnValue()) {
-                String[] options = {Language.INSTANCE.localize("common.ok")};
-                JOptionPane.showOptionDialog(App.settings.getParent(), Language.INSTANCE.localize("account" + "" +
-                    ".skinerror"), Language.INSTANCE.localize("common.error"), JOptionPane
-                    .DEFAULT_OPTION, JOptionPane.ERROR_MESSAGE, null, options, options[0]);
+                DialogManager.okDialog().setTitle(GetText.tr("Error"))
+                        .setContent(GetText.tr("Error downloading skin. Please try again later!"))
+                        .setType(DialogManager.ERROR).show();
             }
             this.skinUpdating = false;
         }
@@ -567,27 +602,27 @@ public class Account implements Serializable {
     }
 
     public String getAccessToken() {
-        return (this.accessToken == null ? "0" : this.accessToken);
-    }
+        if (this.store == null) {
+            return null;
+        }
 
-    public void setAccessToken(String accessToken) {
-        this.accessToken = accessToken;
+        return (String) this.store.get("accessToken");
     }
 
     public boolean hasAccessToken() {
-        return this.accessToken != null;
+        return this.store != null && this.store.containsKey("accessToken");
     }
 
     public String getClientToken() {
-        return (this.clientToken == null ? "0" : this.clientToken);
+        if (this.clientToken == null) {
+            this.clientToken = UUID.randomUUID().toString().replace("-", "");
+        }
+
+        return this.clientToken;
     }
 
     public void setClientToken(String clientToken) {
         this.clientToken = clientToken;
-    }
-
-    public boolean hasClientToken() {
-        return this.clientToken != null;
     }
 
     @Override
@@ -596,11 +631,11 @@ public class Account implements Serializable {
     }
 
     public String getSession(LoginResponse response) {
-        if (!response.isOffline() && response != null && response.getAuth().isLoggedIn() && response.getAuth()
-            .canPlayOnline()) {
+        if (!response.isOffline() && response != null && response.getAuth().isLoggedIn()
+                && response.getAuth().canPlayOnline()) {
             if (response.getAuth() instanceof YggdrasilUserAuthentication) {
-                return String.format("token:%s:%s", response.getAuth().getAuthenticatedToken(), UUIDTypeAdapter
-                    .fromUUID(response.getAuth().getSelectedProfile().getId()));
+                return String.format("token:%s:%s", response.getAuth().getAuthenticatedToken(),
+                        UUIDTypeAdapter.fromUUID(response.getAuth().getSelectedProfile().getId()));
             } else {
                 return response.getAuth().getAuthenticatedToken();
             }
@@ -616,39 +651,39 @@ public class Account implements Serializable {
         return this.store;
     }
 
-    public void saveStore(Map<String, Object> store) {
+    public void setStore(Map<String, Object> store) {
         this.store = store;
-        App.settings.saveAccounts();
     }
 
-    // TODO: Change to use Mojang authlib
     public LoginResponse login() {
         LoginResponse response = null;
 
-        if (this.hasAccessToken() && this.hasStore()) {
+        if (this.hasAccessToken()) {
             LogManager.info("Trying to login with access token!");
-            response = Authentication.login(this);
+            response = Authentication.login(this, false);
         }
 
         if (response == null || response.hasError()) {
-            if (this.hasAccessToken()) {
-                LogManager.error("Access token is NOT valid! Will attempt to get another one!");
-                this.setAccessToken(null);
-                App.settings.saveAccounts();
-            }
+            LogManager.error("Access token is NOT valid! Will attempt to get another one!");
 
             if (!this.isRemembered()) {
                 JPanel panel = new JPanel();
                 panel.setLayout(new BorderLayout());
-                JLabel passwordLabel = new JLabel(Language.INSTANCE.localizeWithReplace("instance.enterpassword",
-                    this.getMinecraftUsername()));
+                JLabel passwordLabel = new JLabel(GetText.tr("Enter password for {0}", this.getMinecraftUsername()));
 
                 JPasswordField passwordField = new JPasswordField();
                 panel.add(passwordLabel, BorderLayout.NORTH);
                 panel.add(passwordField, BorderLayout.CENTER);
-                int ret = JOptionPane.showConfirmDialog(App.settings.getParent(), panel, Language.INSTANCE.localize
-                    ("instance.enterpasswordtitle"), JOptionPane.OK_CANCEL_OPTION);
-                if (ret == JOptionPane.OK_OPTION) {
+
+                int ret = DialogManager.confirmDialog().setTitle(GetText.tr("Enter Password")).setContent(panel).show();
+
+                if (ret == DialogManager.OK_OPTION) {
+                    if (passwordField.getPassword().length == 0) {
+                        LogManager.error("Aborting login for " + this.getMinecraftUsername() + ", no password entered");
+                        App.settings.setMinecraftLaunched(false);
+                        return null;
+                    }
+
                     this.setPassword(new String(passwordField.getPassword()));
                 } else {
                     LogManager.error("Aborting login for " + this.getMinecraftUsername());
@@ -662,11 +697,14 @@ public class Account implements Serializable {
 
         if (response.hasError() && !response.isOffline()) {
             LogManager.error(response.getErrorMessage());
-            String[] options = {Language.INSTANCE.localize("common.ok")};
-            JOptionPane.showOptionDialog(App.settings.getParent(), HTMLUtils.centerParagraph(Language.INSTANCE
-                    .localizeWithReplace("instance.errorloggingin", "<br/><br/>" + response.getErrorMessage())),
-                Language.INSTANCE.localize("instance" + ".errorloggingintitle"), JOptionPane.DEFAULT_OPTION,
-                JOptionPane.ERROR_MESSAGE, null, options, options[0]);
+
+            DialogManager
+                    .okDialog().setTitle(
+                            GetText.tr("Error Logging In"))
+                    .setContent(new HTMLBuilder().center().text(GetText.tr("Couldn't login to Minecraft servers")
+                            + "<br/><br/>" + response.getErrorMessage()).build())
+                    .setType(DialogManager.ERROR).show();
+
             App.settings.setMinecraftLaunched(false);
             return null;
         }
@@ -676,9 +714,8 @@ public class Account implements Serializable {
         }
 
         if (!response.isOffline()) {
-            this.setAccessToken(response.getAuth().getAuthenticatedToken());
             this.setUUID(response.getAuth().getSelectedProfile().getId().toString());
-            response.save();
+            this.setStore(response.getAuth().saveForStorage());
             App.settings.saveAccounts();
         }
 
@@ -698,8 +735,8 @@ public class Account implements Serializable {
         }
 
         if (!currentUsername.equals(this.minecraftUsername)) {
-            LogManager.info("The username for account with UUID of " + this.getUUIDNoDashes() + " changed from " +
-                this.minecraftUsername + " to " + currentUsername);
+            LogManager.info("The username for account with UUID of " + this.getUUIDNoDashes() + " changed from "
+                    + this.minecraftUsername + " to " + currentUsername);
             this.minecraftUsername = currentUsername;
             return true;
         }
